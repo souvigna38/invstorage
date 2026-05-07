@@ -1,0 +1,178 @@
+{
+  "name": "InvStorage — ERPNext Product Sync (Phase 1: Shadow)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "erpnext-product-sync",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "c1000001-0003-4000-8000-000000000001",
+      "name": "Medusa Product Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 340],
+      "webhookId": "erpnext-product-sync",
+      "notes": "Receives product.created and product.updated events from Medusa subscriber. Add this webhook URL to your Medusa subscriber or chain from the Product Launch Pipeline."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Flatten Medusa Variants → ERPNext Items ─────────────────────\n// ERPNext expects flat \"Items\" while Medusa has nested Product→Variants.\n// For each variant, we create a separate ERPNext Item.\n//\n// Gotcha #1 (SKU Discipline): Every variant MUST have a unique SKU.\n// Gotcha #2 (Variant Mismatch): We sync as flat items, not ERPNext templates.\n\nconst event = $input.first().json;\nconst product = event.data || {};\nconst variants = product.variants || [];\nconst metadata = product.metadata || {};\n\nconst items = [];\n\nfor (const variant of variants) {\n  // Determine the SKU (item_code for ERPNext)\n  const sku = variant.sku \n    || `INVT-${metadata.inventory_item_id || product.id?.replace('prod_', '')}-${variant.title?.replace(/\\s+/g, '-').toUpperCase() || 'DEFAULT'}`;\n\n  // Determine the item name\n  const itemName = variants.length === 1 && variant.title === 'Default'\n    ? product.title\n    : `${product.title} (${variant.title})`;\n\n  // Get price (Medusa stores in cents)\n  const priceEntry = (variant.prices || [])[0] || {};\n  const priceInCents = priceEntry.amount || 0;\n  const priceDollars = priceInCents / 100;\n\n  items.push({\n    json: {\n      // ERPNext Item fields\n      item_code: sku,\n      item_name: itemName,\n      item_group: 'Products',\n      stock_uom: 'Nos',\n      description: product.description || itemName,\n      standard_rate: priceDollars,\n      valuation_rate: priceDollars,\n      is_stock_item: 1,\n      has_variants: 0,\n      // Medusa linking metadata\n      custom_medusa_product_id: product.id,\n      custom_medusa_variant_id: variant.id,\n      custom_medusa_handle: product.handle,\n      // Image (first product image)\n      image: (product.images || [])[0]?.url || null,\n      // Context\n      event_type: event.event,\n      is_update: event.event === 'product.updated',\n    }\n  });\n}\n\nif (items.length === 0) {\n  // Fallback: create a single item from the product\n  items.push({\n    json: {\n      item_code: `INVT-${metadata.inventory_item_id || product.id?.replace('prod_', '')}`,\n      item_name: product.title || 'Unknown Item',\n      item_group: 'Products',\n      stock_uom: 'Nos',\n      description: product.description || '',\n      standard_rate: 0,\n      valuation_rate: 0,\n      is_stock_item: 1,\n      has_variants: 0,\n      custom_medusa_product_id: product.id,\n      event_type: event.event,\n      is_update: event.event === 'product.updated',\n    }\n  });\n}\n\nconsole.log(`[ERPNext Sync] Flattened ${variants.length} variant(s) → ${items.length} ERPNext Item(s)`);\nreturn items;"
+      },
+      "id": "c1000001-0003-4000-8000-000000000002",
+      "name": "Flatten Variants → Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 340]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "is-update",
+              "leftValue": "={{ $json.is_update }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "c1000001-0003-4000-8000-000000000003",
+      "name": "Create or Update?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://erpnext-backend:8000/api/resource/Item",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ item_code: $json.item_code, item_name: $json.item_name, item_group: $json.item_group, stock_uom: $json.stock_uom, description: $json.description, standard_rate: $json.standard_rate, valuation_rate: $json.valuation_rate, is_stock_item: $json.is_stock_item, has_variants: $json.has_variants, image: $json.image }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "c1000001-0003-4000-8000-000000000004",
+      "name": "Create Item in ERPNext",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 240],
+      "notes": "SETUP REQUIRED: Configure ERPNext HTTP Header Auth credential with:\nName: Authorization\nValue: token api_key:api_secret\n\nGenerate keys in ERPNext → Settings → API Access."
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://erpnext-backend:8000/api/resource/Item/{{ encodeURIComponent($json.item_code) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ item_name: $json.item_name, description: $json.description, standard_rate: $json.standard_rate, valuation_rate: $json.valuation_rate, image: $json.image }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "c1000001-0003-4000-8000-000000000005",
+      "name": "Update Item in ERPNext",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 440],
+      "notes": "Updates an existing ERPNext Item when a Medusa product is updated."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Log sync result ──────────────────────────────────────────────\nconst item = $input.first().json;\nconsole.log(`[ERPNext Sync] ✓ Item synced: ${item.data?.name || item.item_code || 'unknown'}`);\nreturn [$input.first()];"
+      },
+      "id": "c1000001-0003-4000-8000-000000000006",
+      "name": "Log Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 340]
+    }
+  ],
+  "connections": {
+    "Medusa Product Webhook": {
+      "main": [
+        [
+          {
+            "node": "Flatten Variants → Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten Variants → Items": {
+      "main": [
+        [
+          {
+            "node": "Create or Update?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create or Update?": {
+      "main": [
+        [
+          {
+            "node": "Update Item in ERPNext",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Item in ERPNext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Item in ERPNext": {
+      "main": [
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Item in ERPNext": {
+      "main": [
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {}
+}

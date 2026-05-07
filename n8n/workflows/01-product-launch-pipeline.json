@@ -1,0 +1,346 @@
+{
+  "name": "InvStorage — Product Launch Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "medusa-product",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Medusa Product Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 340],
+      "webhookId": "medusa-product"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Parse Medusa Product Event ───────────────────────────────────\n// Extracts key fields and determines which sales channels to target.\n\nconst event = $input.first().json;\nconst product = event.data || {};\nconst metadata = product.metadata || {};\n\n// Get the first variant's price (Medusa stores prices in cents)\nconst variant = (product.variants || [])[0] || {};\nconst priceInCents = (variant.prices || [])[0]?.amount || 0;\nconst currency = (variant.prices || [])[0]?.currency_code || 'usd';\n\n// Get the first image URL\nconst imageUrl = (product.images || [])[0]?.url || null;\n\n// Get channels from metadata (set during publish from InvStorage UI)\n// Default: empty array (no auto-distribution)\nconst channels = metadata.channels || [];\n\nreturn [{\n  json: {\n    event_type: event.event,\n    timestamp: event.timestamp,\n    product_id: product.id,\n    title: product.title || 'Untitled',\n    description: product.description || '',\n    handle: product.handle,\n    status: product.status,\n    price_cents: priceInCents,\n    price_dollars: (priceInCents / 100).toFixed(2),\n    currency: currency,\n    image_url: imageUrl,\n    inventory_item_id: metadata.inventory_item_id || null,\n    channels: channels,\n    has_ebay: channels.includes('ebay'),\n    has_amazon: channels.includes('amazon'),\n    has_craigslist: channels.includes('craigslist'),\n    has_facebook: channels.includes('facebook'),\n    metadata: metadata\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000002",
+      "name": "Parse Product Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 340]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-ebay",
+                    "leftValue": "={{ $json.has_ebay }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "eBay"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-amazon",
+                    "leftValue": "={{ $json.has_amazon }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Amazon"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-craigslist",
+                    "leftValue": "={{ $json.has_craigslist }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Craigslist"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cond-facebook",
+                    "leftValue": "={{ $json.has_facebook }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Facebook"
+            }
+          ]
+        },
+        "options": {
+          "allMatchingOutputs": true
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000003",
+      "name": "Channel Router",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [680, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ebay.com/sell/inventory/v1/inventory_item/{{ $json.product_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_EBAY_TOKEN"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "product",
+              "value": "={{ JSON.stringify({ title: $json.title, description: $json.description, imageUrls: [$json.image_url].filter(Boolean) }) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000004",
+      "name": "eBay — Create Listing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 140],
+      "disabled": true,
+      "notes": "SETUP REQUIRED: Replace YOUR_EBAY_TOKEN with actual eBay OAuth credentials. Use n8n's credential system for secure storage. See: https://developer.ebay.com/develop/apis"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://medusa:9000/admin/products/{{ $json.product_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.medusaApi.token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ metadata: { ...($json.metadata || {}), ebay_item_id: $('eBay — Create Listing').first().json.itemId || 'pending' } }) }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000005",
+      "name": "eBay — Update Medusa Metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 140],
+      "disabled": true,
+      "notes": "After eBay accepts the listing, saves the eBay Item ID back to Medusa product metadata for two-way linking."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/items",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_AMAZON_TOKEN"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000006",
+      "name": "Amazon — Create Listing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 340],
+      "disabled": true,
+      "notes": "SETUP REQUIRED: Configure Amazon SP-API credentials. See: https://developer-docs.amazon.com/sp-api/"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.NOTIFICATION_EMAIL || 'your-email@example.com' }}",
+        "subject": "=📸 Post to Craigslist: {{ $json.title }}",
+        "emailType": "html",
+        "html": "=<div style=\"font-family: -apple-system, system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;\">\n  <div style=\"background: #10b981; color: white; padding: 16px 20px; border-radius: 8px 8px 0 0;\">\n    <h2 style=\"margin: 0;\">📋 Ready to Post on Craigslist</h2>\n  </div>\n  <div style=\"border: 1px solid #e5e7eb; border-top: none; padding: 20px; border-radius: 0 0 8px 8px;\">\n    <h3 style=\"margin-top: 0;\">{{ $json.title }}</h3>\n    <p><strong>Price:</strong> ${{ $json.price_dollars }}</p>\n    <p><strong>Description:</strong></p>\n    <blockquote style=\"background: #f9fafb; padding: 12px; border-left: 3px solid #10b981; margin: 8px 0;\">{{ $json.description }}</blockquote>\n    {{ $json.image_url ? '<p><strong>Image:</strong><br><img src=\"' + $json.image_url + '\" style=\"max-width: 400px; border-radius: 8px; margin-top: 8px;\"></p>' : '' }}\n    <hr style=\"border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;\">\n    <p style=\"color: #6b7280; font-size: 12px;\">Medusa Product ID: {{ $json.product_id }}<br>Inventory Item ID: {{ $json.inventory_item_id }}<br>Generated by InvStorage n8n Pipeline</p>\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000007",
+      "name": "Craigslist — Email Draft",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [940, 540],
+      "disabled": true,
+      "notes": "SETUP REQUIRED: Configure SMTP credentials in n8n Settings > Credentials. Sends a pre-formatted email you can copy/paste into the Craigslist posting form."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.NOTIFICATION_EMAIL || 'your-email@example.com' }}",
+        "subject": "=📸 Post to Facebook Marketplace: {{ $json.title }}",
+        "emailType": "html",
+        "html": "=<div style=\"font-family: -apple-system, system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;\">\n  <div style=\"background: #1877f2; color: white; padding: 16px 20px; border-radius: 8px 8px 0 0;\">\n    <h2 style=\"margin: 0;\">📋 Ready to Post on Facebook Marketplace</h2>\n  </div>\n  <div style=\"border: 1px solid #e5e7eb; border-top: none; padding: 20px; border-radius: 0 0 8px 8px;\">\n    <h3 style=\"margin-top: 0;\">{{ $json.title }}</h3>\n    <p><strong>Price:</strong> ${{ $json.price_dollars }}</p>\n    <p><strong>Description:</strong></p>\n    <blockquote style=\"background: #f9fafb; padding: 12px; border-left: 3px solid #1877f2; margin: 8px 0;\">{{ $json.description }}</blockquote>\n    {{ $json.image_url ? '<p><strong>Image:</strong><br><img src=\"' + $json.image_url + '\" style=\"max-width: 400px; border-radius: 8px; margin-top: 8px;\"></p>' : '' }}\n    <hr style=\"border: none; border-top: 1px solid #e5e7eb; margin: 16px 0;\">\n    <p style=\"color: #6b7280; font-size: 12px;\">Medusa Product ID: {{ $json.product_id }}<br>Generated by InvStorage n8n Pipeline</p>\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000008",
+      "name": "Facebook — Email Draft",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [940, 740],
+      "disabled": true,
+      "notes": "SETUP REQUIRED: Configure SMTP credentials. Pre-formatted email for Facebook Marketplace posting."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Log Product Event ─────────────────────────────────────────────\n// Always runs to provide an activity log of all product events.\n\nconst item = $input.first().json;\n\nconsole.log(`[InvStorage] Product event processed:`);\nconsole.log(`  Event: ${item.event_type}`);\nconsole.log(`  Title: ${item.title}`);\nconsole.log(`  Price: $${item.price_dollars}`);\nconsole.log(`  Channels: ${item.channels.length > 0 ? item.channels.join(', ') : 'none (Medusa only)'}`);\nconsole.log(`  Product ID: ${item.product_id}`);\n\nreturn [{ json: { ...item, logged: true, logged_at: new Date().toISOString() } }];"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000009",
+      "name": "Log Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 580]
+    }
+  ],
+  "connections": {
+    "Medusa Product Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Product Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Product Data": {
+      "main": [
+        [
+          {
+            "node": "Channel Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Channel Router": {
+      "main": [
+        [
+          {
+            "node": "eBay — Create Listing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Amazon — Create Listing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Craigslist — Email Draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Facebook — Email Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "eBay — Create Listing": {
+      "main": [
+        [
+          {
+            "node": "eBay — Update Medusa Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {}
+}

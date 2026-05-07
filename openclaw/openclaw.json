@@ -1,0 +1,138 @@
+{
+  // =========================================================================
+  // InvStorage — OpenClaw Agent Configuration
+  // =========================================================================
+  // This configures the AI agent that powers the "Photo-to-Cash" pipeline.
+  //
+  // SETUP:
+  //   1. Replace YOUR_* placeholders with real values
+  //   2. Run: openclaw doctor --fix
+  //   3. Run: openclaw gateway
+  //
+  // Models: Uses Anthropic Claude 3.5 Sonnet as primary.
+  //         API key is read from the ANTHROPIC_API_KEY env var at runtime.
+  //         For local-only: configure Ollama provider below.
+  // =========================================================================
+
+  "agents": {
+    "defaults": {
+      "model": {
+        // Primary: Claude 3.5 Sonnet — vision + reasoning at reasonable cost
+        // Fallbacks: Claude Haiku for cheaper routine tasks
+        "primary": "anthropic/claude-3-5-sonnet-latest",
+        "fallbacks": [
+          "anthropic/claude-3-5-haiku-latest",
+          "openai/gpt-4o-mini"
+        ]
+      },
+
+      "workspace": "/home/node/.openclaw/workspace",
+
+      "memorySearch": {
+        "sources": ["memory", "sessions"],
+        "experimental": { "sessionMemory": true },
+        "provider": "openai",
+        "model": "text-embedding-3-small"
+      },
+
+      "contextPruning": {
+        "mode": "cache-ttl",
+        "ttl": "6h",
+        "keepLastAssistants": 3
+      },
+
+      "compaction": {
+        "mode": "default",
+        "memoryFlush": {
+          "enabled": true,
+          "softThresholdTokens": 40000,
+          "prompt": "Extract: items listed, prices set, sales made, customer interactions, price changes, negotiation outcomes. Format: ## [HH:MM] Topic. NO_FLUSH if nothing happened."
+        }
+      },
+
+      "heartbeat": {
+        // Cheapest Anthropic model for periodic stale-listing checks
+        "model": "anthropic/claude-3-5-haiku-latest"
+      },
+
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 6
+      }
+    },
+
+    "list": [
+      {
+        "id": "main",
+        "default": true
+      }
+    ]
+  },
+
+  "logging": {
+    "redactSensitive": "tools"
+  },
+
+  "tools": {
+    "web": {
+      "search": { "enabled": true },
+      "fetch": { "enabled": true }
+    }
+  },
+
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+
+  // ── Channels ──────────────────────────────────────────────────────────────
+  // Set up Telegram: Message @BotFather on Telegram → /newbot → get token
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "botToken": "YOUR_TELEGRAM_BOT_TOKEN",
+      "groupPolicy": "allowlist",
+      "streamMode": "partial"
+    }
+    // Uncomment to add Discord:
+    // "discord": {
+    //   "enabled": true,
+    //   "token": "YOUR_DISCORD_BOT_TOKEN",
+    //   "groupPolicy": "allowlist",
+    //   "dm": { "enabled": true, "policy": "allowlist" }
+    // }
+  },
+
+  // ── Gateway ───────────────────────────────────────────────────────────────
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    }
+  },
+
+  // ── Auth Profiles ─────────────────────────────────────────────────────────
+  // API keys go in ~/.openclaw/credentials/ (chmod 600)
+  "auth": {
+    "profiles": {
+      "anthropic:default": {
+        "provider": "anthropic",
+        "mode": "api_key"
+      },
+      "openai:default": {
+        "provider": "openai",
+        "mode": "api_key"
+      }
+    }
+  },
+
+  // ── Channel → Agent Binding ───────────────────────────────────────────────
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": { "channel": "telegram" }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+# Dependencies (will be installed fresh)
+node_modules
+.npm
+
+# Build output (will be built fresh)
+.next
+
+# Generated Prisma client (will be regenerated)
+src/generated
+
+# Git
+.git
+.gitignore
+
+# Environment (provided at runtime via docker-compose)
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Processed photos (data, not code)
+processed/

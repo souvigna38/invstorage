@@ -1,0 +1,10 @@
+# Docker persistent data (don't commit to git)
+pg_data/
+minio_data/
+redis_data/
+
+# Environment files with secrets
+.env
+
+# Migration tarballs (large binary files)
+*.tar.gz

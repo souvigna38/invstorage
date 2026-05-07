@@ -1,0 +1,50 @@
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "worker": "tsx src/workers/index.ts",
+    "worker:dev": "tsx watch src/workers/index.ts",
+    "ingest": "tsx src/scripts/ingest-photos.ts",
+    "ingest:dry": "tsx src/scripts/ingest-photos.ts --dry-run",
+    "group": "tsx src/scripts/group-photos.ts",
+    "group:json": "tsx src/scripts/group-photos.ts --json",
+    "label": "tsx src/scripts/label-unprocessed.ts",
+    "msrp": "tsx src/scripts/msrp-lookup.ts"
+  },
+  "dependencies": {
+    "@heroicons/react": "^2.2.0",
+    "@prisma/adapter-pg": "^7.3.0",
+    "@prisma/client": "^7.3.0",
+    "bullmq": "^5.67.3",
+    "dotenv": "^17.2.4",
+    "ioredis": "^5.9.2",
+    "minio": "^8.0.6",
+    "next": "16.1.6",
+    "pg": "^8.18.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-qr-code": "^2.0.18",
+    "react-responsive-carousel": "^3.2.23",
+    "serpapi": "^2.2.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/ioredis": "^4.28.10",
+    "@types/minio": "^7.1.0",
+    "@types/node": "^20",
+    "@types/pg": "^8.16.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "prisma": "^7.3.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.21.0",
+    "typescript": "5.9.3"
+  }
+}

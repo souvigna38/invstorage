@@ -1,0 +1,253 @@
+{
+  "name": "InvStorage — Inventory Sync Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "medusa-order",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000001",
+      "name": "Medusa Order Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 340],
+      "webhookId": "medusa-order"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://medusa:9000/admin/orders/{{ $json.data.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.medusaApi?.token || 'MEDUSA_TOKEN_HERE' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Get Order Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 340],
+      "notes": "Fetches full order details from Medusa Admin API including line items, product IDs, and quantities."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Extract Sold Products ────────────────────────────────────────\n// Parses the Medusa order response to get product IDs and metadata\n// for cross-platform inventory sync.\n\nconst orderData = $input.first().json;\nconst order = orderData.order || orderData;\n\nconst items = (order.items || []).map(item => ({\n  product_id: item.product_id,\n  variant_id: item.variant_id,\n  title: item.title,\n  quantity: item.quantity,\n  unit_price: item.unit_price,\n  metadata: item.metadata || {},\n}));\n\nconst result = {\n  order_id: order.id,\n  order_status: order.status,\n  customer_email: order.email,\n  total: order.total,\n  currency: order.currency_code,\n  items: items,\n  product_ids: items.map(i => i.product_id),\n  created_at: order.created_at,\n};\n\nconsole.log(`[InvStorage] Order ${result.order_id}: ${items.length} item(s) sold`);\nitems.forEach(item => {\n  console.log(`  - ${item.title} (product: ${item.product_id}, qty: ${item.quantity})`);\n});\n\nreturn [{ json: result }];"
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000003",
+      "name": "Parse Order Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Generate Inventory Update Requests ───────────────────────────\n// Creates one output item per sold product, each containing the API\n// call needed to set Medusa inventory to 0 (mark as sold/out of stock).\n\nconst order = $input.first().json;\nconst updates = [];\n\nfor (const item of (order.items || [])) {\n  updates.push({\n    json: {\n      order_id: order.order_id,\n      product_id: item.product_id,\n      variant_id: item.variant_id,\n      title: item.title,\n      action: 'mark_sold',\n      // The next HTTP node will use these to update Medusa\n      update_url: `http://medusa:9000/admin/products/${item.product_id}`,\n      update_body: { status: 'draft', metadata: { sold: true, sold_order_id: order.order_id, sold_at: new Date().toISOString() } },\n    }\n  });\n}\n\nconsole.log(`[InvStorage] Prepared ${updates.length} inventory update(s)`);\nreturn updates;"
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000004",
+      "name": "Prepare Inventory Updates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.update_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.medusaApi?.token || 'MEDUSA_TOKEN_HERE' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.update_body) }}",
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000005",
+      "name": "Update Medusa Stock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 340],
+      "notes": "Marks the product as 'draft' (out of stock) in Medusa and adds sold metadata. This cascades to the frontend."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://medusa:9000/api/sales/sync-sold",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ product_id: $json.product_id, order_id: $json.order_id, sold_price: $json.unit_price }) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000006",
+      "name": "Update Inventory DB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 340],
+      "disabled": true,
+      "notes": "OPTIONAL: Calls the InvStorage frontend API to mark the inventory item as sold. Enable this after creating the /api/sales/sync-sold endpoint."
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ebay-sold",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000010",
+      "name": "eBay IPN Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 640],
+      "webhookId": "ebay-sold",
+      "notes": "Receives eBay Instant Payment Notification (IPN) when an item sells. Configure this URL in eBay Developer Portal."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Parse eBay Sold Notification ─────────────────────────────────\n// Extracts the eBay Item ID from the IPN and looks up the\n// corresponding Medusa product.\n\nconst notification = $input.first().json;\n\n// eBay IPN fields vary by notification type\nconst ebayItemId = notification.ItemID || notification.item_id || notification.itemId;\nconst salePrice = notification.SalePrice || notification.sale_price;\n\nconsole.log(`[InvStorage] eBay item sold: ${ebayItemId}`);\n\nreturn [{\n  json: {\n    ebay_item_id: ebayItemId,\n    sale_price: salePrice,\n    source: 'ebay',\n    // Next step: query Medusa for the product with this eBay ID in metadata\n    medusa_search_url: `http://medusa:9000/admin/products?metadata[ebay_item_id]=${ebayItemId}`\n  }\n}];"
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000011",
+      "name": "Parse eBay Sale",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 640],
+      "disabled": true,
+      "notes": "Parses eBay IPN. Enable when you have eBay API credentials configured."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.medusa_search_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $credentials.medusaApi?.token || 'MEDUSA_TOKEN_HERE' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000012",
+      "name": "Find Medusa Product by eBay ID",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 640],
+      "disabled": true,
+      "notes": "Looks up the Medusa product that has this eBay Item ID in its metadata."
+    }
+  ],
+  "connections": {
+    "Medusa Order Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Order Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Order Details": {
+      "main": [
+        [
+          {
+            "node": "Parse Order Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Order Items": {
+      "main": [
+        [
+          {
+            "node": "Prepare Inventory Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Inventory Updates": {
+      "main": [
+        [
+          {
+            "node": "Update Medusa Stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Medusa Stock": {
+      "main": [
+        [
+          {
+            "node": "Update Inventory DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "eBay IPN Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse eBay Sale",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse eBay Sale": {
+      "main": [
+        [
+          {
+            "node": "Find Medusa Product by eBay ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {}
+}

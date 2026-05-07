@@ -1,0 +1,158 @@
+{
+  "name": "InvStorage — OpenClaw Product Submission",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "openclaw-product",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "f1000001-0006-4000-8000-000000000001",
+      "name": "OpenClaw Product Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 340],
+      "webhookId": "openclaw-product",
+      "notes": "Receives product data from OpenClaw after photo analysis and user confirmation. The agent POSTs: { title, description, price_dollars, sku, channels, image_url, condition, source }"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── Validate and normalize OpenClaw product submission ──────────\nconst input = $input.first().json;\n\n// Validate required fields\nif (!input.title || !input.price_dollars) {\n  throw new Error('Missing required fields: title and price_dollars');\n}\n\nconst priceCents = Math.round((input.price_dollars || 0) * 100);\nconst sku = input.sku || `OC-${Date.now().toString(36).toUpperCase()}`;\nconst channels = input.channels || [];\n\nconsole.log(`[OpenClaw] Product submission: ${input.title} at $${input.price_dollars}`);\nconsole.log(`[OpenClaw] SKU: ${sku}, Channels: ${channels.join(', ') || 'none'}`);\n\nreturn [{\n  json: {\n    title: input.title,\n    description: input.description || '',\n    price_cents: priceCents,\n    price_dollars: input.price_dollars,\n    sku: sku,\n    channels: channels,\n    image_url: input.image_url || null,\n    condition: input.condition || 'good',\n    source: 'openclaw-photo-pipeline',\n    metadata: {\n      inventory_item_id: input.inventory_item_id || null,\n      channels: channels,\n      source: 'openclaw-photo-pipeline',\n      condition: input.condition || 'good',\n      openclaw_session: input.session_id || null,\n    }\n  }\n}];"
+      },
+      "id": "f1000001-0006-4000-8000-000000000002",
+      "name": "Validate & Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://medusa:9000/auth/user/emailpass",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"email\":\"admin@invstorage.local\",\"password\":\"invtrack123\"}",
+        "options": {}
+      },
+      "id": "f1000001-0006-4000-8000-000000000003",
+      "name": "Auth with Medusa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const token = $input.first().json.token;\nconst product = $('Validate & Normalize').first().json;\n\n// Build Medusa product payload\nconst payload = {\n  title: product.title,\n  description: product.description,\n  status: 'published',\n  metadata: product.metadata,\n  options: [{ title: 'Type', values: ['Default'] }],\n  variants: [{\n    title: 'Default',\n    sku: product.sku,\n    options: { Type: 'Default' },\n    prices: [{ amount: product.price_cents, currency_code: 'usd' }],\n    manage_inventory: false\n  }]\n};\n\n// Add image if provided\nif (product.image_url) {\n  payload.images = [{ url: product.image_url }];\n}\n\nreturn [{ json: { token, payload } }];"
+      },
+      "id": "f1000001-0006-4000-8000-000000000004",
+      "name": "Build Product Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://medusa:9000/admin/products",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "f1000001-0006-4000-8000-000000000005",
+      "name": "Create Product in Medusa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconst product = result.product || {};\nconst originalData = $('Validate & Normalize').first().json;\n\nconsole.log(`[OpenClaw] ✓ Product created: ${product.id} — ${product.title}`);\n\n// Return success response to OpenClaw\nreturn [{\n  json: {\n    success: true,\n    product_id: product.id,\n    title: product.title,\n    handle: product.handle,\n    sku: originalData.sku,\n    price: originalData.price_dollars,\n    channels: originalData.channels,\n    medusa_url: `http://localhost:9500/app/products/${product.id}`,\n    message: `Created: ${product.title} for $${originalData.price_dollars} (${product.id})`\n  }\n}];"
+      },
+      "id": "f1000001-0006-4000-8000-000000000006",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 340]
+    }
+  ],
+  "connections": {
+    "OpenClaw Product Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate & Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Normalize": {
+      "main": [
+        [
+          {
+            "node": "Auth with Medusa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auth with Medusa": {
+      "main": [
+        [
+          {
+            "node": "Build Product Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Product Payload": {
+      "main": [
+        [
+          {
+            "node": "Create Product in Medusa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Product in Medusa": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {}
+}

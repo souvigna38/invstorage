@@ -1,0 +1,183 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model action_logs {
+  id                                                Int        @id @default(autoincrement())
+  action_type                                       String     @db.VarChar(50)
+  performed_by                                      Int?
+  item_id                                           Int?
+  target_user_id                                    Int?
+  from_location_id                                  Int?
+  to_location_id                                    Int?
+  note                                              String?
+  action_date                                       DateTime?  @default(now()) @db.Timestamptz(6)
+  expected_return                                   DateTime?  @db.Date
+  attachment_url                                    String?
+  source                                            String?    @default("web") @db.VarChar(50)
+  ip_address                                        String?    @db.Inet
+  user_agent                                        String?
+  metadata                                          Json?      @default("{}")
+  created_at                                        DateTime?  @default(now()) @db.Timestamptz(6)
+  locations_action_logs_from_location_idTolocations locations? @relation("action_logs_from_location_idTolocations", fields: [from_location_id], references: [id], onUpdate: NoAction)
+  items                                             items?     @relation(fields: [item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users_action_logs_performed_byTousers             users?     @relation("action_logs_performed_byTousers", fields: [performed_by], references: [id], onUpdate: NoAction)
+  users_action_logs_target_user_idTousers           users?     @relation("action_logs_target_user_idTousers", fields: [target_user_id], references: [id], onUpdate: NoAction)
+  locations_action_logs_to_location_idTolocations   locations? @relation("action_logs_to_location_idTolocations", fields: [to_location_id], references: [id], onUpdate: NoAction)
+
+  @@index([action_date], map: "idx_action_logs_date")
+  @@index([item_id], map: "idx_action_logs_item")
+  @@index([action_type], map: "idx_action_logs_type")
+  @@index([performed_by], map: "idx_action_logs_user")
+  @@index([created_at], map: "idx_action_logs_created")
+}
+
+model categories {
+  id               Int          @id @default(autoincrement())
+  name             String       @db.VarChar(255)
+  slug             String       @unique @db.VarChar(255)
+  description      String?
+  image_url        String?
+  parent_id        Int?
+  display_order    Int?         @default(0)
+  created_at       DateTime?    @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?    @default(now()) @db.Timestamptz(6)
+  categories       categories?  @relation("categoriesTocategories", fields: [parent_id], references: [id], onUpdate: NoAction)
+  other_categories categories[] @relation("categoriesTocategories")
+  items            items[]
+}
+
+model item_images {
+  id               Int       @id @default(autoincrement())
+  item_id          Int
+  image_url        String
+  alt_text         String?   @db.VarChar(255)
+  display_order    Int?      @default(0)
+  is_primary       Boolean?  @default(false)
+  created_at       DateTime? @default(now()) @db.Timestamptz(6)
+  ai_processed     Boolean?  @default(false)
+  ai_description   String?
+  ai_main_color    String?   @db.VarChar(100)
+  ai_object_type   String?   @db.VarChar(255)
+  ai_detected_text String?
+  ai_tags          Json?     @default("[]")
+  ai_processed_at  DateTime? @db.Timestamptz(6)
+  items            items     @relation(fields: [item_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([item_id], map: "idx_item_images_item")
+  @@index([ai_processed], map: "idx_item_images_ai_unprocessed")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model items {
+  id                                             Int           @id @default(autoincrement())
+  title                                          String        @db.VarChar(255)
+  description                                    String?
+  price                                          Decimal?      @default(0.00) @db.Decimal(12, 2)
+  image_url                                      String?
+  rating                                         Decimal?      @default(5.0) @db.Decimal(2, 1)
+  rating_count                                   Int?          @default(1)
+  asset_tag                                      String?       @unique @db.VarChar(255)
+  serial_number                                  String?       @db.VarChar(255)
+  model_name                                     String?       @db.VarChar(255)
+  model_number                                   String?       @db.VarChar(255)
+  manufacturer                                   String?       @db.VarChar(255)
+  category_id                                    Int?
+  location_id                                    Int?
+  default_location_id                            Int?
+  assigned_to_user_id                            Int?
+  status                                         String?       @default("available") @db.VarChar(50)
+  purchase_date                                  DateTime?     @db.Date
+  purchase_cost                                  Decimal?      @db.Decimal(12, 2)
+  warranty_months                                Int?
+  warranty_expires                               DateTime?     @db.Date
+  order_number                                   String?       @db.VarChar(255)
+  supplier                                       String?       @db.VarChar(255)
+  quantity                                       Int?          @default(1)
+  is_requestable                                 Boolean?      @default(false)
+  last_checkout                                  DateTime?     @db.Timestamptz(6)
+  last_checkin                                   DateTime?     @db.Timestamptz(6)
+  expected_checkin                               DateTime?     @db.Date
+  checkout_counter                               Int?          @default(0)
+  notes                                          String?
+  custom_fields                                  Json?         @default("{}")
+  created_at                                     DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at                                     DateTime?     @default(now()) @db.Timestamptz(6)
+  deleted_at                                     DateTime?     @db.Timestamptz(6)
+  cpu_type                                       String?       @db.VarChar(255)
+  ram_amount                                     String?       @db.VarChar(100)
+  hard_drive_info                                String?       @db.VarChar(255)
+  gpu                                            String?       @db.VarChar(255)
+  network_info                                   String?       @db.VarChar(500)
+  role                                           String?       @db.VarChar(255)
+  storage_detail                                 String?
+  search_text                                    String?
+  estimated_value                                Decimal?      @db.Decimal(12, 2)
+  msrp_price                                     Decimal?      @db.Decimal(12, 2)
+  msrp_source                                    String?
+  msrp_lookup_query                              String?
+  msrp_last_checked                              DateTime?     @db.Timestamptz(6)
+  list_price                                     Decimal?      @db.Decimal(12, 2)
+  sold_price                                     Decimal?      @db.Decimal(12, 2)
+  sold_date                                      DateTime?     @db.Date
+  listing_url                                    String?
+  medusa_product_id                              String?       @db.VarChar(255)
+  action_logs                                    action_logs[]
+  item_images                                    item_images[]
+  users                                          users?        @relation(fields: [assigned_to_user_id], references: [id], onUpdate: NoAction)
+  categories                                     categories?   @relation(fields: [category_id], references: [id], onUpdate: NoAction)
+  locations_items_default_location_idTolocations locations?    @relation("items_default_location_idTolocations", fields: [default_location_id], references: [id], onUpdate: NoAction)
+  locations_items_location_idTolocations         locations?    @relation("items_location_idTolocations", fields: [location_id], references: [id], onUpdate: NoAction)
+
+  @@index([asset_tag], map: "idx_items_asset_tag")
+  @@index([assigned_to_user_id], map: "idx_items_assigned")
+  @@index([category_id], map: "idx_items_category")
+  @@index([deleted_at], map: "idx_items_deleted_at")
+  @@index([location_id], map: "idx_items_location")
+  @@index([status], map: "idx_items_status")
+  @@index([medusa_product_id], map: "idx_items_medusa_product")
+  @@index([updated_at], map: "idx_items_updated_at")
+  @@index([created_at], map: "idx_items_created_at")
+  @@index([deleted_at, status], map: "idx_items_active_status")
+}
+
+model locations {
+  id                                                  Int           @id @default(autoincrement())
+  name                                                String        @db.VarChar(255)
+  description                                         String?
+  address                                             String?       @db.VarChar(255)
+  city                                                String?       @db.VarChar(100)
+  state                                               String?       @db.VarChar(100)
+  country                                             String?       @db.VarChar(100)
+  zip                                                 String?       @db.VarChar(20)
+  parent_id                                           Int?
+  image_url                                           String?
+  created_at                                          DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at                                          DateTime?     @default(now()) @db.Timestamptz(6)
+  action_logs_action_logs_from_location_idTolocations action_logs[] @relation("action_logs_from_location_idTolocations")
+  action_logs_action_logs_to_location_idTolocations   action_logs[] @relation("action_logs_to_location_idTolocations")
+  items_items_default_location_idTolocations          items[]       @relation("items_default_location_idTolocations")
+  items_items_location_idTolocations                  items[]       @relation("items_location_idTolocations")
+  locations                                           locations?    @relation("locationsTolocations", fields: [parent_id], references: [id], onUpdate: NoAction)
+  other_locations                                     locations[]   @relation("locationsTolocations")
+}
+
+model users {
+  id                                            Int           @id @default(autoincrement())
+  name                                          String        @db.VarChar(255)
+  email                                         String        @unique @db.VarChar(255)
+  avatar_url                                    String?
+  role                                          String?       @default("member") @db.VarChar(50)
+  created_at                                    DateTime?     @default(now()) @db.Timestamptz(6)
+  updated_at                                    DateTime?     @default(now()) @db.Timestamptz(6)
+  action_logs_action_logs_performed_byTousers   action_logs[] @relation("action_logs_performed_byTousers")
+  action_logs_action_logs_target_user_idTousers action_logs[] @relation("action_logs_target_user_idTousers")
+  items                                         items[]
+}

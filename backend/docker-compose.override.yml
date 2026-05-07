@@ -1,0 +1,37 @@
+# =============================================================================
+# macOS (SPM1) Override — Warm Backup / Development
+# =============================================================================
+# This file automatically applies on SPM1 to override production settings.
+#
+# To use production mode (BigBrain), rename or delete this file:
+#   mv docker-compose.override.yml docker-compose.override.yml.bak
+#
+# Key differences from production:
+#   - restart: unless-stopped (not always) — Mac doesn't auto-reboot
+#   - No Postgres tuning (default settings for 16GB RAM)
+#   - AI worker disabled (run worker locally with `npm run worker`)
+# =============================================================================
+
+services:
+  db:
+    restart: unless-stopped
+    # Override production tuning — use defaults for macOS
+    command: postgres
+
+  redis:
+    restart: unless-stopped
+
+  storage:
+    restart: unless-stopped
+
+  db-ui:
+    restart: unless-stopped
+
+  # CLIP service — use unless-stopped for dev
+  clip-service:
+    restart: unless-stopped
+
+  # Disable ai-worker in dev — run it locally with `npm run worker`
+  ai-worker:
+    profiles:
+      - production

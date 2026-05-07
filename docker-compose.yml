@@ -1,0 +1,930 @@
+# =============================================================================
+# InvStorage (Personal Inventory Portable) — Fully Self-Contained Docker Deployment
+# =============================================================================
+#
+# FIRST TIME SETUP:
+#   chmod +x scripts/setup.sh && ./scripts/setup.sh
+#
+# AFTER SETUP:
+#   docker compose up -d
+#
+# Services:
+#   frontend     → Next.js web app (port 3000)
+#   db           → PostgreSQL 15 + pgvector (port 5432)
+#   redis        → Redis for BullMQ + Medusa sessions (port 6379)
+#   storage      → MinIO S3 object storage (ports 9000/9001)
+#   ollama       → Local LLM server for AI vision labeling (port 11434)
+#   clip-service → CLIP embedding service (port 8100)
+#   ai-worker    → Background AI processor (BullMQ consumer)
+#   medusa       → Medusa.js sales backend (port 9500) + admin at /app
+#   n8n          → Workflow automation engine (port 5678)
+#   openclaw     → AI agent gateway — "Photo-to-Cash" (port 18789)
+#   datalake-db  → Central Data Lake Postgres (port 5435)
+#   ingestion-api→ dlt-powered JSON ingestion API (port 8085)
+#   nocodb       → Data Lake spreadsheet UI (port 8086)
+#   erpnext-*    → ERPNext shadow ERP system (port 8090)
+#   db-ui        → Adminer database browser (port 8080)
+#
+# This is a PORTABLE package — no host-specific paths.
+# Drop photos into ./photo-inbox/ and hit Ingest in the UI.
+# Data is persisted in named Docker volumes across restarts.
+#
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database + pgvector (semantic vector search)
+  # ---------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg15
+    container_name: invportable_db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secure_password
+      POSTGRES_DB: inventory
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d inventory"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ---------------------------------------------------------------------------
+  # Redis — BullMQ Job Queue
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:alpine
+    container_name: invportable_redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # MinIO — S3-Compatible Object Storage (item images)
+  # ---------------------------------------------------------------------------
+  storage:
+    image: minio/minio:latest
+    container_name: invportable_storage
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "127.0.0.1:9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - miniodata:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # Ollama — Local LLM Server (Vision AI for photo labeling)
+  # ---------------------------------------------------------------------------
+  # Runs LLaVA and other models inside the container. Models are persisted
+  # in a named volume. First startup requires model pulls (see setup.sh).
+  #
+  # API: http://ollama:11434 (internal) / http://localhost:11434 (host)
+  # Models: llava, deepseek-r1:8b, qwen2.5vl, qwen3, llama3.2
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: invportable_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+
+  # ---------------------------------------------------------------------------
+  # CLIP Service — AI Vector Embedding (text ↔ image search)
+  # ---------------------------------------------------------------------------
+  clip-service:
+    build:
+      context: ./backend/clip-service
+      dockerfile: Dockerfile
+    container_name: invportable_clip
+    restart: unless-stopped
+    ports:
+      - "8100:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 600s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # ---------------------------------------------------------------------------
+  # Next.js Frontend — Main Web Application
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_MINIO_ENDPOINT: "http://localhost:9000"
+        NEXT_PUBLIC_MINIO_BUCKET: "inventory"
+        NEXT_PUBLIC_HOST_IP: "localhost"
+    container_name: invportable_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://admin:secure_password@db:5432/inventory?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      CLIP_SERVICE_URL: "http://clip-service:8000"
+      OLLAMA_HOST: "http://ollama:11434"
+      OLLAMA_MODEL: "llava"
+      # MinIO: internal endpoint for server operations
+      MINIO_ENDPOINT: "storage"
+      MINIO_PORT: "9000"
+      MINIO_ACCESS_KEY: "minioadmin"
+      MINIO_SECRET_KEY: "minioadmin123"
+      MINIO_BUCKET: "inventory"
+      # MinIO: public hostname for browser-facing image URLs
+      MINIO_PUBLIC_HOST: "localhost"
+      MINIO_PUBLIC_PORT: "9000"
+      # Photo inbox (bind-mounted to local photo-inbox directory)
+      PHOTO_INBOX: "/data/photo-inbox"
+      # Vault_SpM1 — backup vault database
+      VAULT_DATABASE_URL: "postgresql://vault:vault_secret@vault-db:5432/vault_spm1"
+      # Medusa sales backend (internal Docker network URL)
+      MEDUSA_BACKEND_URL: "http://medusa:9000"
+      MEDUSA_ADMIN_EMAIL: "admin@invstorage.local"
+      MEDUSA_ADMIN_PASSWORD: "invtrack123"
+    volumes:
+      - ./photo-inbox:/data/photo-inbox
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      storage:
+        condition: service_healthy
+      clip-service:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      vault-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # AI Worker — Background Image Processor (BullMQ Consumer)
+  # ---------------------------------------------------------------------------
+  ai-worker:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.worker
+    container_name: invportable_ai_worker
+    restart: unless-stopped
+    command: npm run worker
+    environment:
+      DATABASE_URL: "postgresql://admin:secure_password@db:5432/inventory?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      CLIP_SERVICE_URL: "http://clip-service:8000"
+      OLLAMA_HOST: "http://ollama:11434"
+      OLLAMA_MODEL: "llava"
+      NODE_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clip-service:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ---------------------------------------------------------------------------
+  # Medusa.js — Sales Management Backend + Admin Dashboard
+  # ---------------------------------------------------------------------------
+  medusa:
+    build:
+      context: ./medusa
+      dockerfile: Dockerfile
+    container_name: invportable_medusa
+    restart: unless-stopped
+    ports:
+      - "9500:9000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: "postgresql://admin:secure_password@db:5432/medusa_store"
+      REDIS_URL: "redis://redis:6379"
+      JWT_SECRET: "invstorage-medusa-jwt-secret-2026"
+      COOKIE_SECRET: "invstorage-medusa-cookie-secret-2026"
+      STORE_CORS: "http://localhost:3000,http://localhost:9500"
+      ADMIN_CORS: "http://localhost:3000,http://localhost:9500"
+      AUTH_CORS: "http://localhost:3000,http://localhost:9500"
+      # n8n webhook URL (internal Docker network) for Medusa subscribers
+      N8N_WEBHOOK_URL: "http://n8n:5678"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # n8n — Workflow Automation Engine (The Nervous System)
+  # ---------------------------------------------------------------------------
+  # Listens for Medusa events (product created, order placed) and distributes
+  # listings to eBay, Amazon, Craigslist, Facebook Marketplace.
+  #
+  # UI: http://localhost:5678 (set up owner account on first visit)
+  #
+  # Known Docker issues addressed:
+  #   - Uses PostgreSQL backend (not SQLite) to prevent corruption in Docker
+  #   - Execution data auto-prunes after 7 days to prevent disk growth
+  #   - Memory capped at 512MB to prevent runaway consumption
+  #   - Encryption key set for secure credential storage
+  #   - Community packages enabled for eBay/marketplace nodes
+  # ---------------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: invportable_n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # Database — PostgreSQL backend (more reliable than SQLite in Docker)
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: db
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: admin
+      DB_POSTGRESDB_PASSWORD: secure_password
+      # Webhook — correct URL generation for self-hosted instance
+      WEBHOOK_URL: "http://localhost:5678"
+      N8N_HOST: "0.0.0.0"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: "http"
+      # Security — encryption key for stored credentials
+      N8N_ENCRYPTION_KEY: "invtrack-n8n-encryption-key-2026"
+      # Community packages — enables eBay, marketplace nodes from npm
+      N8N_COMMUNITY_PACKAGES_ENABLED: "true"
+      # Execution data — auto-prune after 7 days to prevent disk growth
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+      # Timezone
+      GENERIC_TIMEZONE: "America/New_York"
+      TZ: "America/New_York"
+      # Performance — cap memory usage
+      NODE_OPTIONS: "--max-old-space-size=512"
+    volumes:
+      - n8ndata:/home/node/.n8n
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:5678/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ===========================================================================
+  # OpenClaw — AI Agent Gateway ("Photo-to-Cash" Intelligence Layer)
+  # ===========================================================================
+  # Local-first AI agent that connects to Telegram/Discord and orchestrates:
+  #   - Photo → Vision analysis → Product listing (fully autonomous)
+  #   - eBay price checking & market validation
+  #   - Customer email triage & auto-responses
+  #   - Lowball offer negotiation
+  #   - Stale listing refresh (30-day monitor)
+  #
+  # UI: http://localhost:18789 (gateway token auth)
+  # Telegram: Message your bot to interact
+  #
+  # SETUP REQUIRED:
+  #   1. Set OPENCLAW_AI_PROVIDER_KEY in .env or below
+  #   2. Create a Telegram bot via @BotFather → get token
+  #   3. Run: docker compose exec openclaw openclaw onboard
+  #   4. Install skills: docker compose exec openclaw npx clawhub@latest install vision-pro rest-api-client browser-driver gmail-manager
+  # ===========================================================================
+  openclaw:
+    image: 1panel/openclaw:latest
+    container_name: invportable_openclaw
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18789:18789"
+    environment:
+      HOME: /home/node
+      # Anthropic — primary LLM provider (Claude 3.5 Sonnet)
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+      # Gateway auth token (generated — keep secret)
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN}"
+      # Internal network URLs for the agent to reach other services
+      MEDUSA_API_URL: "http://medusa:9000"
+      N8N_WEBHOOK_URL: "http://n8n:5678"
+      ERPNEXT_API_URL: "http://erpnext-backend:8000"
+    # Copy host config into writable volume on startup, then launch gateway.
+    # Direct bind-mount of openclaw.json fails (EBUSY on atomic rename).
+    user: "0:0"
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        chown -R 1000:1000 /home/node/.openclaw 2>/dev/null || true &&
+        cp /tmp/openclaw-init-config.json /home/node/.openclaw/openclaw.json &&
+        exec openclaw gateway
+    volumes:
+      - openclaw_data:/home/node/.openclaw
+      - ./openclaw/openclaw.json:/tmp/openclaw-init-config.json:ro
+      - ./openclaw/workspace:/home/node/.openclaw/workspace
+    depends_on:
+      n8n:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:18789/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # Central Data Lake — Backup Warehouse + Schema-Evolving Ingestion
+  # ===========================================================================
+  # A standalone Postgres 16 "DataLake" database with a dlt-powered FastAPI
+  # service that auto-creates schemas, tables, and columns from raw JSON.
+  #
+  # Ports:
+  #   DataLake DB:    localhost:5435  (Postgres)
+  #   Ingestion API:  localhost:8085  (POST /ingest)
+  #   NocoDB UI:      localhost:8086  (spreadsheet viewer)
+  #
+  # Usage:
+  #   curl -X POST http://localhost:8085/ingest \
+  #     -H "Content-Type: application/json" \
+  #     -d '{"schema_name":"scrapers","table_name":"products","data":[{"id":1,"name":"Lamp","price":50}]}'
+  # ===========================================================================
+
+  # DataLake Database (Postgres 16 — separate from main inventory DB)
+  datalake-db:
+    image: postgres:16-alpine
+    container_name: invportable_datalake_db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5435:5432"
+    environment:
+      POSTGRES_USER: datalake
+      POSTGRES_PASSWORD: datalake_secret
+      POSTGRES_DB: central_lake
+    volumes:
+      - datalake_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datalake -d central_lake"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Ingestion API (FastAPI + dlt — schema evolution engine)
+  ingestion-api:
+    build:
+      context: ./ingestion_service
+      dockerfile: Dockerfile
+    container_name: invportable_ingestion_api
+    restart: unless-stopped
+    ports:
+      - "8085:8000"
+    environment:
+      DESTINATION__POSTGRES__CREDENTIALS: "postgresql://datalake:datalake_secret@datalake-db:5432/central_lake"
+    depends_on:
+      datalake-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # NocoDB — Spreadsheet UI for the Data Lake
+  nocodb:
+    image: nocodb/nocodb:latest
+    container_name: invportable_nocodb
+    restart: unless-stopped
+    ports:
+      - "8086:8080"
+    environment:
+      NC_DB: "pg://datalake-db:5432?u=datalake&p=datalake_secret&d=central_lake"
+    depends_on:
+      datalake-db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # ERPNext — Shadow ERP System (Business Database & Accounting)
+  # ===========================================================================
+  # Phase 1 (Shadow): Medusa is master. ERPNext passively mirrors product
+  #   catalog and orders via n8n. Provides accounting, reporting, audit trail.
+  # Phase 2 (Master Switch): ERPNext becomes inventory master. Purchase
+  #   Receipts in ERPNext push stock quantities back to Medusa.
+  #
+  # UI: http://localhost:8090 (Administrator / admin)
+  # API: http://erpnext-backend:8000 (internal Docker network)
+  # ===========================================================================
+
+  # ERPNext Database (MariaDB — required by Frappe/ERPNext)
+  erpnext-db:
+    image: mariadb:10.6
+    container_name: invportable_erpnext_db
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+      MARIADB_ROOT_PASSWORD: admin
+    volumes:
+      - erpnext_mariadb:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "--password=admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ERPNext Redis — Cache
+  erpnext-redis-cache:
+    image: redis:6.2-alpine
+    container_name: invportable_erpnext_redis_cache
+    command: redis-server --ignore-warnings ARM64-COW-BUG
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ERPNext Redis — Job Queue
+  erpnext-redis-queue:
+    image: redis:6.2-alpine
+    container_name: invportable_erpnext_redis_queue
+    command: redis-server --ignore-warnings ARM64-COW-BUG
+    restart: unless-stopped
+    volumes:
+      - erpnext_redis_queue:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ERPNext Configurator (one-time — creates bench config)
+  erpnext-configurator:
+    image: frappe/erpnext:v16.5.0
+    container_name: invportable_erpnext_config
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    command:
+      - >
+        ls -1 apps > sites/apps.txt;
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
+        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
+        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+    environment:
+      DB_HOST: erpnext-db
+      DB_PORT: "3306"
+      REDIS_CACHE: erpnext-redis-cache:6379
+      REDIS_QUEUE: erpnext-redis-queue:6379
+      SOCKETIO_PORT: "9000"
+    volumes:
+      - erpnext_sites:/home/frappe/frappe-bench/sites
+      - erpnext_logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      erpnext-db:
+        condition: service_healthy
+      erpnext-redis-cache:
+        condition: service_started
+      erpnext-redis-queue:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ERPNext Site Creator (one-time — initializes database + installs ERPNext)
+  erpnext-create-site:
+    image: frappe/erpnext:v16.5.0
+    container_name: invportable_erpnext_create_site
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    command:
+      - >
+        wait-for-it -t 120 erpnext-db:3306;
+        wait-for-it -t 120 erpnext-redis-cache:6379;
+        wait-for-it -t 120 erpnext-redis-queue:6379;
+        export start=`date +%s`;
+        until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]] &&
+        [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_cache // empty"` ]] &&
+        [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_queue // empty"` ]];
+        do
+        echo "Waiting for sites/common_site_config.json to be created";
+        sleep 5;
+        if (( `date +%s`-start > 120 )); then
+        echo "could not find sites/common_site_config.json with required keys";
+        exit 1;
+        fi
+        done;
+        echo "sites/common_site_config.json found";
+        if [ -f sites/invstorage.local/site_config.json ] || [ -f sites/invtrack.local/site_config.json ]; then
+        echo "ERPNext site already exists (invstorage.local or legacy invtrack.local) — skipping creation";
+        else
+        bench new-site
+        --mariadb-user-host-login-scope='%'
+        --admin-password=admin
+        --db-root-username=root
+        --db-root-password=admin
+        --install-app erpnext
+        --set-default
+        invstorage.local;
+        echo "Site invstorage.local created successfully";
+        fi
+    volumes:
+      - erpnext_sites:/home/frappe/frappe-bench/sites
+      - erpnext_logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      erpnext-configurator:
+        condition: service_completed_successfully
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ERPNext Backend (gunicorn — main API server)
+  erpnext-backend:
+    image: frappe/erpnext:v16.5.0
+    container_name: invportable_erpnext_backend
+    restart: unless-stopped
+    volumes:
+      - erpnext_sites:/home/frappe/frappe-bench/sites
+      - erpnext_logs:/home/frappe/frappe-bench/logs
+    environment:
+      DB_HOST: erpnext-db
+      DB_PORT: "3306"
+      MYSQL_ROOT_PASSWORD: admin
+      MARIADB_ROOT_PASSWORD: admin
+    depends_on:
+      erpnext-create-site:
+        condition: service_completed_successfully
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # ERPNext Queue Worker (background job processor)
+  erpnext-worker:
+    image: frappe/erpnext:v16.5.0
+    container_name: invportable_erpnext_worker
+    restart: unless-stopped
+    command: ["bench", "worker", "--queue", "long,default,short"]
+    volumes:
+      - erpnext_sites:/home/frappe/frappe-bench/sites
+      - erpnext_logs:/home/frappe/frappe-bench/logs
+    environment:
+      FRAPPE_REDIS_CACHE: "redis://erpnext-redis-cache:6379"
+      FRAPPE_REDIS_QUEUE: "redis://erpnext-redis-queue:6379"
+    depends_on:
+      erpnext-create-site:
+        condition: service_completed_successfully
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ERPNext Scheduler (cron-like background tasks)
+  erpnext-scheduler:
+    image: frappe/erpnext:v16.5.0
+    container_name: invportable_erpnext_scheduler
+    restart: unless-stopped
+    command: ["bench", "schedule"]
+    volumes:
+      - erpnext_sites:/home/frappe/frappe-bench/sites
+      - erpnext_logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      erpnext-create-site:
+        condition: service_completed_successfully
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ERPNext WebSocket (real-time updates for UI)
+  erpnext-websocket:
+    image: frappe/erpnext:v16.5.0
+    container_name: invportable_erpnext_websocket
+    restart: unless-stopped
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+    environment:
+      FRAPPE_REDIS_CACHE: "redis://erpnext-redis-cache:6379"
+      FRAPPE_REDIS_QUEUE: "redis://erpnext-redis-queue:6379"
+    volumes:
+      - erpnext_sites:/home/frappe/frappe-bench/sites
+      - erpnext_logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      erpnext-create-site:
+        condition: service_completed_successfully
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ERPNext Frontend (Nginx reverse proxy — serves UI)
+  erpnext-frontend:
+    image: frappe/erpnext:v16.5.0
+    container_name: invportable_erpnext_frontend
+    restart: unless-stopped
+    command: ["nginx-entrypoint.sh"]
+    ports:
+      - "8090:8080"
+    environment:
+      BACKEND: erpnext-backend:8000
+      SOCKETIO: erpnext-websocket:9000
+      FRAPPE_SITE_NAME_HEADER: invstorage.local
+      UPSTREAM_REAL_IP_ADDRESS: "127.0.0.1"
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: "50m"
+    volumes:
+      - erpnext_sites:/home/frappe/frappe-bench/sites
+      - erpnext_logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      erpnext-backend:
+        condition: service_started
+      erpnext-websocket:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Vault_SpM1 — Timestamped Backup Vault (Snapshot + Rollback)
+  # ---------------------------------------------------------------------------
+  # Self-contained Postgres DB that stores dated snapshots of the entire
+  # inventory (tables + image binaries). Supports point-in-time rollback.
+  #
+  # Port: localhost:5436
+  # DB:   vault_spm1
+  # ---------------------------------------------------------------------------
+  vault-db:
+    image: pgvector/pgvector:pg15
+    container_name: vault_spm1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5436:5432"
+    environment:
+      POSTGRES_USER: vault
+      POSTGRES_PASSWORD: vault_secret
+      POSTGRES_DB: vault_spm1
+    volumes:
+      - vault_spm1_data:/var/lib/postgresql/data
+      - ./backend/vault-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vault -d vault_spm1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Vault Cron — Daily midnight snapshots
+  vault-cron:
+    image: alpine:3.19
+    container_name: invportable_vault_cron
+    restart: unless-stopped
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        apk add --no-cache curl > /dev/null 2>&1
+        echo "0 0 * * * curl -s -X POST http://frontend:3000/api/vault/snapshot > /proc/1/fd/1 2>&1" > /etc/crontabs/root
+        echo "[vault-cron] Daily snapshot scheduled at midnight"
+        crond -f -l 2
+    depends_on:
+      frontend:
+        condition: service_healthy
+      vault-db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Adminer — Database Browser UI
+  # ---------------------------------------------------------------------------
+  db-ui:
+    image: adminer:latest
+    container_name: invportable_adminer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# Named Volumes — Data persists across container restarts
+# =============================================================================
+volumes:
+  ollama_data:
+    name: invportable_ollama_data
+  pgdata:
+    name: invportable_pgdata
+  redisdata:
+    name: invportable_redisdata
+  miniodata:
+    name: invportable_miniodata
+  n8ndata:
+    name: invportable_n8ndata
+  openclaw_data:
+    name: invportable_openclaw_data
+  datalake_pgdata:
+    name: invportable_datalake_pgdata
+  erpnext_mariadb:
+    name: invportable_erpnext_mariadb
+  erpnext_redis_queue:
+    name: invportable_erpnext_redis_queue
+  erpnext_sites:
+    name: invportable_erpnext_sites
+  erpnext_logs:
+    name: invportable_erpnext_logs
+  vault_spm1_data:
+    name: vault_spm1_data
+
+# =============================================================================
+# Networks — For future isolation (services remain on default for now)
+# =============================================================================
+networks:
+  default:
+    name: invportable_default
+  db_internal:
+    name: invportable_db_internal
+    internal: true

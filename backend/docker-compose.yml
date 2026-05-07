@@ -1,0 +1,156 @@
+# =============================================================================
+# Personal Inventory System — Backend Infrastructure
+# =============================================================================
+# Services:
+#   db           → PostgreSQL 15 + pgvector (primary database w/ vector search)
+#   redis        → Redis (BullMQ job queue broker)
+#   storage      → MinIO S3-compatible object storage (item images)
+#   db-ui        → Adminer (lightweight DB browser on :8080)
+#   ai-worker    → Background AI vision processor (LLaVA via Ollama)
+#   clip-service → CLIP embedding microservice (text ↔ image vector search)
+# =============================================================================
+# Environment:
+#   macOS (SPM1)  → Dev/Warm Backup   → restart: unless-stopped
+#   Linux (BigBrain) → Production      → restart: always
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database (pgvector for semantic/vector search)
+  # ---------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg15
+    container_name: inventory_db
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secure_password
+      POSTGRES_DB: inventory
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d    # Auto-runs SQL on first startup
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d inventory"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Production tuning for BigBrain (128GB RAM, 32 threads)
+    command: >
+      postgres
+        -c shared_buffers=4GB
+        -c effective_cache_size=12GB
+        -c work_mem=256MB
+        -c maintenance_work_mem=1GB
+        -c max_connections=200
+        -c wal_buffers=64MB
+        -c checkpoint_completion_target=0.9
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
+        -c max_worker_processes=16
+        -c max_parallel_workers_per_gather=4
+        -c max_parallel_workers=16
+        -c log_min_duration_statement=1000
+
+  # ---------------------------------------------------------------------------
+  # Redis — BullMQ Job Queue Broker
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:alpine
+    container_name: inventory_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # MinIO — S3-Compatible Object Storage (for item images)
+  # ---------------------------------------------------------------------------
+  storage:
+    image: minio/minio
+    container_name: inventory_storage
+    restart: always
+    ports:
+      - "9000:9000"     # S3 API
+      - "9001:9001"     # Web Console
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - ./minio_data:/data
+    command: server /data --console-address ":9001"
+
+  # ---------------------------------------------------------------------------
+  # Adminer — Lightweight Database UI
+  # ---------------------------------------------------------------------------
+  db-ui:
+    image: adminer
+    container_name: inventory_adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # CLIP Service — Multimodal Vector Embedding (text ↔ image search)
+  # ---------------------------------------------------------------------------
+  # Exposes POST /embed-text and POST /embed-image endpoints.
+  # Returns 512-dim vectors for cosine similarity search in pgvector.
+  # ---------------------------------------------------------------------------
+  clip-service:
+    build:
+      context: ./clip-service
+      dockerfile: Dockerfile
+    container_name: inventory_clip
+    restart: always
+    ports:
+      - "8100:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s   # Model loading takes ~60-90s on first boot
+
+  # ---------------------------------------------------------------------------
+  # AI Worker — Background Image Processor (BullMQ Consumer)
+  # ---------------------------------------------------------------------------
+  # Runs the same codebase but executes the worker script instead of Next.js.
+  # Wakes at 3 AM (via BullMQ cron), processes unscanned images with LLaVA.
+  # ---------------------------------------------------------------------------
+  ai-worker:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.worker
+    container_name: inventory_ai_worker
+    restart: always
+    command: npm run worker
+    environment:
+      DATABASE_URL: "postgresql://admin:secure_password@db:5432/inventory?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      OLLAMA_HOST: "http://host.docker.internal:11434"
+      CLIP_SERVICE_URL: "http://clip-service:8000"
+      NODE_ENV: "production"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clip-service:
+        condition: service_healthy
+    # On Linux, add this to reach host's Ollama:
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
