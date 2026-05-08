@@ -13,8 +13,10 @@ cd "$PROJECT_DIR"
 
 # Check Docker is running
 if ! docker info > /dev/null 2>&1; then
-    echo "ERROR: Docker is not running. Please start Docker Desktop first."
-    echo "  On Mac: open -a Docker"
+    echo "ERROR: Docker is not running or your user cannot access the daemon."
+    echo "  Ubuntu/Linux: sudo systemctl start docker"
+    echo "                sudo usermod -aG docker \"\$USER\"  # then log out and back in"
+    echo "  macOS:        open -a Docker"
     exit 1
 fi
 

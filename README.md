@@ -4,10 +4,13 @@ A fully self-contained personal inventory management system packaged as a Docker
 
 ## Requirements
 
-- **macOS** with [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed
-- **8 GB RAM** minimum allocated to Docker (16 GB recommended)
-- **15 GB disk space** for Docker images and data
-- Docker Desktop must be running before setup
+- **Docker Engine** with the **Compose V2 plugin** (`docker compose`, not only legacy `docker-compose`)
+  - **macOS:** [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+  - **Ubuntu / Debian:** Install Docker from Docker’s official repo or `sudo apt install docker.io docker-compose-plugin`; enable `sudo systemctl enable --now docker` and add your user to the `docker` group
+- **8 GB RAM** minimum for Docker hosts (**16 GB** recommended — CLIP, Ollama, and ERPNext are heavy)
+- **~15 GB** free disk for images and volumes (more after ERPNext / models pull)
+
+Verified portability: all app images are **Linux-based** (Alpine / Debian slim). HEIC conversion uses **`libheif`** in the frontend container, so Linux builds match macOS behavior for photo ingest.
 
 ### Migrating from InvTrack
 
@@ -18,20 +21,32 @@ A fully self-contained personal inventory management system packaged as a Docker
 
 ## Quick Start
 
-```bash
-# 1. Open Terminal and navigate to this directory
-cd PersonalInventoryPortable
+### Clone from GitHub
 
-# 2. Run the first-time setup (builds images, restores database, creates storage)
+```bash
+git clone https://github.com/souvigna38/invstorage.git
+cd invstorage   # or: cd PersonalInventoryPortable if you copied the folder
+```
+
+### First-time setup (any OS)
+
+```bash
+cp .env.example .env    # optional: set OPENCLAW / keys before compose reads them
+
 chmod +x scripts/setup.sh
 ./scripts/setup.sh
-
-# 3. Wait for all services to start (1-5 minutes depending on your Mac)
-docker compose ps   # Check status — wait until all show "Up" or "healthy"
-
-# 4. Open the Inventory App
-open http://localhost:3000
 ```
+
+Wait until critical services are healthy (often **1–5 minutes**; ERPNext first boot can take longer):
+
+```bash
+docker compose ps
+```
+
+Open the app:
+
+- **macOS:** `open http://localhost:3000`
+- **Linux:** `xdg-open http://localhost:3000` or browse to `http://localhost:3000` (or use your server’s LAN IP from another machine)
 
 ## Web Interfaces
 
@@ -114,25 +129,52 @@ The system runs 22 Docker containers:
 | 9500 | Medusa |
 | 18789 | OpenClaw |
 
-## Transferring to Another Mac
+## Ubuntu server notes
 
-1. Copy the entire `PersonalInventoryPortable/` folder to the new Mac
-2. Install Docker Desktop on the new Mac
-3. Open Terminal and run:
+1. **Install Docker** (example — follow [Docker Engine docs](https://docs.docker.com/engine/install/ubuntu/) for current steps):
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y ca-certificates curl
+   # … add Docker’s apt repo per official docs, then:
+   sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+   sudo systemctl enable --now docker
+   sudo usermod -aG docker "$USER"   # log out and back in
+   ```
+
+2. **Firewall:** if `ufw` is enabled, allow the ports you need (at minimum **3000** for the web UI), or only expose via reverse proxy / Tailscale — see port table below.
+
+3. **Remote access:** bind addresses in `docker-compose.yml` already use `127.0.0.1` for some DB/admin ports; the inventory app is published on **0.0.0.0:3000** by default so LAN access works on Ubuntu.
+
+4. **ARM64:** Most images support `linux/arm64`; ERPNext Frappe images are multi-arch. If a service fails to pull on ARM, check logs with `docker compose logs <service>`.
+
+## Transferring to another machine (Mac or Linux)
+
+1. Clone or copy the project folder
+2. Install Docker (Desktop on Mac; Engine + Compose on Linux)
+3. On the **old** machine, refresh bundled SQL if you rely on the portable dump:
 
 ```bash
-cd PersonalInventoryPortable
-./scripts/backup.sh      # (on original Mac, before copying — to get latest data)
-./scripts/setup.sh       # (on new Mac)
+./scripts/backup.sh
+```
+
+4. On the **new** machine:
+
+```bash
+cd invstorage   # project root
+./scripts/setup.sh
 ```
 
 ## Troubleshooting
 
-### Docker Desktop not running
+### Docker daemon not reachable
+
 ```bash
-open -a Docker    # Start Docker Desktop on macOS
-# Wait 30 seconds, then try again
+docker info    # should succeed without sudo after joining group docker
 ```
+
+- **Ubuntu:** `sudo systemctl start docker` · `sudo usermod -aG docker $USER` (then **log out and back in**)
+- **macOS:** start Docker Desktop (`open -a Docker`), wait ~30s, retry
 
 ### A service won't start
 ```bash

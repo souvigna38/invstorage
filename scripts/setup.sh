@@ -2,7 +2,7 @@
 # =============================================================================
 # Personal Inventory Portable — First-Time Setup
 # =============================================================================
-# Run this ONCE after copying the project to a new Mac.
+# Run this ONCE after cloning or copying the project to a new machine.
 # It builds images, starts core infrastructure, restores the database,
 # creates the MinIO bucket, and brings up all services.
 #
@@ -22,8 +22,10 @@ echo ""
 
 # 1. Check Docker is running
 if ! docker info > /dev/null 2>&1; then
-    echo "ERROR: Docker is not running. Please start Docker Desktop first."
-    echo "  On Mac: open -a Docker"
+    echo "ERROR: Docker is not running or your user cannot access the daemon."
+    echo "  Ubuntu/Linux: sudo systemctl start docker"
+    echo "                sudo usermod -aG docker \"\$USER\"  # then log out and back in"
+    echo "  macOS:        Start Docker Desktop (open -a Docker)"
     exit 1
 fi
 
