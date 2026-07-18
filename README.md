@@ -2,6 +2,8 @@
 
 A fully self-contained personal inventory management system packaged as a Docker deployment. (Previously referred to as InvTrack.) Track household items, electronics, server hardware, and more with AI-powered image analysis, semantic search, sales management, and workflow automation.
 
+For day-to-day operation, see the **[InvTrack / InvStorage User Guide](docs/USER_GUIDE.md)**.
+
 ## Requirements
 
 - **Docker Engine** with the **Compose V2 plugin** (`docker compose`, not only legacy `docker-compose`)
