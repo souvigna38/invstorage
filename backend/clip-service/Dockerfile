@@ -27,6 +27,12 @@ WORKDIR /app
 # Pin setuptools<72 because openai-whisper uses pkg_resources (removed in 72+)
 RUN pip install --no-cache-dir --upgrade pip "setuptools<72" wheel
 
+# Install CPU-only PyTorch explicitly. The default Linux wheel pulls several
+# gigabytes of NVIDIA CUDA libraries that cannot be used by Docker on a Mac.
+RUN pip install --no-cache-dir \
+    "torch==2.5.1+cpu" \
+    --index-url https://download.pytorch.org/whl/cpu
+
 # ── Step 2: Install Whisper FIRST with --no-build-isolation ───────────────
 # This forces pip to use the setuptools we just installed (with pkg_resources)
 # instead of creating an isolated venv that pulls the latest setuptools.

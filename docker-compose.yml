@@ -162,6 +162,9 @@ services:
     build:
       context: ./backend/clip-service
       dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+    platform: linux/amd64
     container_name: invportable_clip
     restart: unless-stopped
     ports:
@@ -435,12 +438,27 @@ services:
       ERPNEXT_API_URL: "http://erpnext-backend:8000"
     # Copy host config into writable volume on startup, then launch gateway.
     # Direct bind-mount of openclaw.json fails (EBUSY on atomic rename).
+    # Force-disable Telegram before gateway start: openclaw doctor auto-enables
+    # the Telegram plugin whenever a channels.telegram block exists, and a
+    # missing/placeholder bot token causes a crash loop or startup hang.
     user: "0:0"
     entrypoint: ["sh", "-c"]
     command:
       - >
         chown -R 1000:1000 /home/node/.openclaw 2>/dev/null || true &&
         cp /tmp/openclaw-init-config.json /home/node/.openclaw/openclaw.json &&
+        node -e '
+          const fs = require("fs");
+          const p = "/home/node/.openclaw/openclaw.json";
+          let raw = fs.readFileSync(p, "utf8");
+          raw = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+          const d = JSON.parse(raw);
+          d.channels = {};
+          d.bindings = [];
+          d.plugins = { entries: { telegram: { enabled: false } } };
+          fs.writeFileSync(p, JSON.stringify(d, null, 2));
+          console.log("openclaw: telegram channel/plugin disabled");
+        ' &&
         exec openclaw gateway
     volumes:
       - openclaw_data:/home/node/.openclaw
@@ -794,7 +812,9 @@ services:
     environment:
       BACKEND: erpnext-backend:8000
       SOCKETIO: erpnext-websocket:9000
-      FRAPPE_SITE_NAME_HEADER: invstorage.local
+      # The volume contains the legacy invtrack.local site; invstorage.local
+      # was never created because create-site skips when a site exists.
+      FRAPPE_SITE_NAME_HEADER: invtrack.local
       UPSTREAM_REAL_IP_ADDRESS: "127.0.0.1"
       UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
       UPSTREAM_REAL_IP_RECURSIVE: "off"
