@@ -26,6 +26,21 @@ type VoiceState =
   | "results"       // Showing search results
   | "error";        // Something went wrong
 
+const WAVEFORM_BARS = [
+  { height: 16, delay: "0.00s", duration: "0.55s" },
+  { height: 26, delay: "0.08s", duration: "0.65s" },
+  { height: 18, delay: "0.16s", duration: "0.45s" },
+  { height: 30, delay: "0.24s", duration: "0.70s" },
+  { height: 22, delay: "0.32s", duration: "0.50s" },
+  { height: 32, delay: "0.40s", duration: "0.60s" },
+  { height: 20, delay: "0.48s", duration: "0.55s" },
+  { height: 28, delay: "0.56s", duration: "0.65s" },
+  { height: 14, delay: "0.64s", duration: "0.48s" },
+  { height: 24, delay: "0.72s", duration: "0.62s" },
+  { height: 16, delay: "0.80s", duration: "0.52s" },
+  { height: 10, delay: "0.88s", duration: "0.45s" },
+];
+
 export default function VoiceSearch() {
   const router = useRouter();
   const [state, setState] = useState<VoiceState>("idle");
@@ -45,6 +60,27 @@ export default function VoiceSearch() {
         streamRef.current.getTracks().forEach((t) => t.stop());
       }
     };
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Send audio to backend
+  // ---------------------------------------------------------------------------
+  const handleAudioBlob = useCallback(async (blob: Blob, mimeType: string) => {
+    setState("processing");
+
+    try {
+      const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+      const formData = new FormData();
+      formData.append("audio", blob, `voice_command.${ext}`);
+
+      const voiceResult = await processVoiceCommand(formData);
+      setResult(voiceResult);
+      setState("results");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Voice search failed";
+      setError(msg);
+      setState("error");
+    }
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -109,7 +145,7 @@ export default function VoiceSearch() {
       }
       setState("error");
     }
-  }, []);
+  }, [handleAudioBlob]);
 
   // ---------------------------------------------------------------------------
   // Stop recording
@@ -120,27 +156,6 @@ export default function VoiceSearch() {
       setState("processing");
     }
   }, []);
-
-  // ---------------------------------------------------------------------------
-  // Send audio to backend
-  // ---------------------------------------------------------------------------
-  const handleAudioBlob = async (blob: Blob, mimeType: string) => {
-    setState("processing");
-
-    try {
-      const ext = mimeType.includes("mp4") ? "mp4" : "webm";
-      const formData = new FormData();
-      formData.append("audio", blob, `voice_command.${ext}`);
-
-      const voiceResult = await processVoiceCommand(formData);
-      setResult(voiceResult);
-      setState("results");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Voice search failed";
-      setError(msg);
-      setState("error");
-    }
-  };
 
   // ---------------------------------------------------------------------------
   // Close overlay
@@ -251,14 +266,14 @@ export default function VoiceSearch() {
 
               {/* Waveform bars */}
               <div className="flex items-end gap-1 mt-6 h-8">
-                {[...Array(12)].map((_, i) => (
+                {WAVEFORM_BARS.map((bar, i) => (
                   <div
                     key={i}
                     className="w-1 bg-[#febd69] rounded-full animate-pulse"
                     style={{
-                      height: `${Math.random() * 24 + 8}px`,
-                      animationDelay: `${i * 0.08}s`,
-                      animationDuration: `${0.4 + Math.random() * 0.4}s`,
+                      height: `${bar.height}px`,
+                      animationDelay: bar.delay,
+                      animationDuration: bar.duration,
                     }}
                   />
                 ))}
