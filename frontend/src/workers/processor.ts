@@ -3,17 +3,19 @@ import { PrismaClient } from "../generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import { sanitizeAiLabel } from "../lib/sanitize";
+import {
+  checkVisionHealth,
+  analyzeImage,
+  getClipEmbedding,
+} from "../lib/vision";
 
 // =============================================================================
 // AI Image Processor — The "Brain" of the Worker
 // =============================================================================
-// Fetches unprocessed images from the DB, sends them to Ollama (LLaVA),
-// and stores the AI analysis back in the database.
+// Fetches unprocessed images from the DB, sends them to Ollama (LLaVA/qwen3-vl)
+// or mock vision provider, and stores the AI analysis back in the database.
 // =============================================================================
 
-const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llava";
-const CLIP_SERVICE_URL = process.env.CLIP_SERVICE_URL || "http://localhost:8100";
 const BATCH_SIZE = 50;
 
 // Create a dedicated Prisma client for the worker (not shared with Next.js)
@@ -40,156 +42,56 @@ interface OllamaAnalysis {
 }
 
 // ---------------------------------------------------------------------------
-// Call Ollama LLaVA with an image URL
+// Call Vision Provider (Ollama or Pluggable Mock)
 // ---------------------------------------------------------------------------
-async function analyzeImageWithOllama(imageUrl: string): Promise<OllamaAnalysis> {
-  // First, fetch the image and convert to base64
-  let base64Image: string;
-
-  try {
-    const response = await fetch(imageUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
-    }
-    const buffer = await response.arrayBuffer();
-    base64Image = Buffer.from(buffer).toString("base64");
-  } catch (error) {
-    console.error(`  ⚠ Could not fetch image from ${imageUrl}:`, error);
-    throw error;
-  }
-
-  // Call Ollama's chat API with the image
-  const prompt = `Analyze this image for a product inventory system. 
-You MUST respond with ONLY valid JSON, no other text. Use this exact format:
-{
-  "main_color": "the dominant color of the object",
-  "object_type": "what kind of object this is (e.g. server, laptop, switch, cable, monitor)",
-  "detected_text": "any visible text, labels, serial numbers, or branding on the object",
-  "short_description": "a brief 1-2 sentence description suitable for an inventory catalog"
-}`;
-
-  const ollamaResponse = await fetch(`${OLLAMA_HOST}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-          images: [base64Image],
-        },
-      ],
-      stream: false,
-      options: {
-        temperature: 0.1,      // Low temp for consistent JSON output
-        num_predict: 500,      // Limit response length
-      },
-    }),
+async function analyzeImageWithOllama(
+  imageUrl: string,
+  filename?: string
+): Promise<OllamaAnalysis> {
+  const result = await analyzeImage(imageUrl, { filename });
+  return sanitizeAiLabel({
+    main_color: result.main_color,
+    object_type: result.object_type,
+    detected_text: result.detected_text,
+    short_description: result.short_description,
   });
-
-  if (!ollamaResponse.ok) {
-    const errorText = await ollamaResponse.text();
-    throw new Error(`Ollama API error (${ollamaResponse.status}): ${errorText}`);
-  }
-
-  const data = await ollamaResponse.json();
-  const content: string = data.message?.content || "{}";
-
-  // Extract JSON from the response (LLaVA sometimes wraps in markdown)
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    console.warn(`  ⚠ Could not extract JSON from Ollama response: ${content.slice(0, 200)}`);
-    return {
-      main_color: "unknown",
-      object_type: "unknown",
-      detected_text: "",
-      short_description: content.slice(0, 200),
-    };
-  }
-
-  try {
-    const raw = JSON.parse(jsonMatch[0]) as OllamaAnalysis;
-    return sanitizeAiLabel(raw);
-  } catch {
-    console.warn(`  ⚠ Invalid JSON from Ollama: ${jsonMatch[0].slice(0, 200)}`);
-    return {
-      main_color: "unknown",
-      object_type: "unknown",
-      detected_text: "",
-      short_description: content.slice(0, 200),
-    };
-  }
 }
 
 // ---------------------------------------------------------------------------
-// Check if Ollama is reachable and model is available
+// Check if Vision Provider is available
 // ---------------------------------------------------------------------------
 async function checkOllamaHealth(): Promise<boolean> {
-  try {
-    const resp = await fetch(`${OLLAMA_HOST}/api/tags`);
-    if (!resp.ok) return false;
-    const data = await resp.json();
-    const models = data.models?.map((m: { name: string }) => m.name) || [];
-    const hasModel = models.some((m: string) => m.startsWith(OLLAMA_MODEL));
-    if (!hasModel) {
-      console.warn(`[Processor] ⚠ Model "${OLLAMA_MODEL}" not found. Available: ${models.join(", ")}`);
-      console.warn(`[Processor]   Run: ollama pull ${OLLAMA_MODEL}`);
-      return false;
-    }
-    return true;
-  } catch {
-    console.error(`[Processor] ❌ Cannot reach Ollama at ${OLLAMA_HOST}`);
+  const health = await checkVisionHealth();
+  if (!health.available) {
+    console.error(`[Processor] ❌ Vision provider unavailable: ${health.error}`);
     return false;
   }
+  console.log(
+    `[Processor] ✓ Vision provider ready: ${health.provider} (model: ${health.model || "default"})`
+  );
+  return true;
 }
 
 // ---------------------------------------------------------------------------
 // Generate CLIP embedding for an image URL
 // ---------------------------------------------------------------------------
 async function generateClipEmbedding(imageUrl: string): Promise<number[] | null> {
-  try {
-    const resp = await fetch(`${CLIP_SERVICE_URL}/embed-image-url`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: imageUrl }),
-    });
-
-    if (!resp.ok) {
-      const errText = await resp.text();
-      console.warn(`    ⚠ CLIP embed failed (${resp.status}): ${errText.slice(0, 200)}`);
-      return null;
-    }
-
-    const data = await resp.json();
-    const embedding: number[] = data.embedding;
-
-    if (!Array.isArray(embedding) || embedding.length !== 512) {
-      console.warn(`    ⚠ CLIP returned unexpected dimensions: ${embedding?.length}`);
-      return null;
-    }
-
-    return embedding;
-  } catch (error) {
-    console.warn(`    ⚠ CLIP service unreachable: ${error instanceof Error ? error.message : error}`);
-    return null;
-  }
+  return getClipEmbedding(imageUrl);
 }
 
 // ---------------------------------------------------------------------------
-// Check if CLIP service is reachable
+// Check if CLIP embedding capability is available
 // ---------------------------------------------------------------------------
 async function checkClipHealth(): Promise<boolean> {
-  try {
-    const resp = await fetch(`${CLIP_SERVICE_URL}/health`);
-    if (!resp.ok) return false;
-    const data = await resp.json();
-    console.log(`[Processor] ✓ CLIP service ready (model: ${data.model}, dim: ${data.dimensions})`);
+  const emb = await getClipEmbedding("health_check_probe");
+  if (emb && emb.length === 512) {
+    console.log(`[Processor] ✓ CLIP embeddings ready (512-dim)`);
     return true;
-  } catch {
-    console.warn(`[Processor] ⚠ CLIP service not available at ${CLIP_SERVICE_URL} — embeddings will be skipped`);
-    return false;
   }
+  console.warn(
+    `[Processor] ⚠ CLIP service not available — embeddings will be skipped`
+  );
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,23 +119,14 @@ export async function processUnscannedImages(job: Job): Promise<ProcessResult> {
     // Health check
     const ollamaOk = await checkOllamaHealth();
     if (!ollamaOk) {
-      console.error("[Processor] Ollama not available — aborting batch");
-      throw new Error(`Ollama not available at ${OLLAMA_HOST} or model "${OLLAMA_MODEL}" missing`);
+      console.error("[Processor] Vision provider not available — aborting batch");
+      throw new Error("Vision provider not available or model missing");
     }
-    console.log(`[Processor] ✓ Ollama is ready (model: ${OLLAMA_MODEL})`);
 
     // Check CLIP service availability (non-blocking — embeddings are optional)
     const clipAvailable = await checkClipHealth();
 
-    // Fetch unprocessed images
-    const images = await prisma.item_images.findMany({
-      where: { ai_processed: false },
-      include: { items: { select: { id: true, title: true } } },
-      take: BATCH_SIZE,
-      orderBy: { created_at: "asc" },
-    });
-
-    // Also check items with image_url but no item_images entry that hasn't been processed
+    // Check items with image_url but no item_images entry that hasn't been processed
     // (for items using direct image_url instead of item_images table)
     const itemsWithUnprocessedMainImage = await prisma.items.findMany({
       where: {

@@ -33,17 +33,15 @@ function createPrisma(): PrismaClient {
 }
 
 import { sanitizeAiLabel, type AiLabel } from "../lib/sanitize";
+import {
+  checkVisionHealth,
+  analyzeImage,
+  getClipEmbedding as visionGetClipEmbedding,
+} from "../lib/vision";
 
 async function checkOllamaHealth(): Promise<boolean> {
-  try {
-    const resp = await fetch(`${OLLAMA_HOST}/api/tags`);
-    if (!resp.ok) return false;
-    const data = await resp.json();
-    const models = data.models?.map((m: { name: string }) => m.name) || [];
-    return models.some((m: string) => m.startsWith(OLLAMA_MODEL));
-  } catch {
-    return false;
-  }
+  const health = await checkVisionHealth();
+  return health.available;
 }
 
 async function checkClipHealth(): Promise<boolean> {
@@ -109,9 +107,20 @@ async function fetchImageAsBase64(imageUrl: string): Promise<string> {
   return resized.toString("base64");
 }
 
-/** Analyze an image URL with LLaVA. */
+/** Analyze an image URL with LLaVA or mock vision provider. */
 async function analyzeWithLLaVA(imageUrl: string): Promise<AiLabel | null> {
   try {
+    const health = await checkVisionHealth();
+    if (health.provider === "mock") {
+      const res = await analyzeImage(imageUrl);
+      return sanitizeAiLabel({
+        main_color: res.main_color,
+        object_type: res.object_type,
+        detected_text: res.detected_text,
+        short_description: res.short_description,
+      });
+    }
+
     const base64Image = await fetchImageAsBase64(imageUrl);
 
     const prompt = `Analyze this image for a product inventory system.
@@ -154,19 +163,7 @@ You MUST respond with ONLY valid JSON, no other text. Use this exact format:
 
 /** Generate CLIP embedding from image URL. */
 async function getClipEmbedding(imageUrl: string): Promise<number[] | null> {
-  try {
-    const url = internalizeUrl(imageUrl);
-    const resp = await fetch(`${CLIP_SERVICE_URL}/embed-image-url`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: url }),
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    return data.embedding as number[];
-  } catch {
-    return null;
-  }
+  return visionGetClipEmbedding(imageUrl);
 }
 
 async function main() {

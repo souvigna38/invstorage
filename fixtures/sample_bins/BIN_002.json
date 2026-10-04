@@ -1,0 +1,23 @@
+{
+  "bin_id": "BIN_002",
+  "zone": "Workshop Wall B",
+  "parent_container": "Garage",
+  "main_color": "green",
+  "object_type": "hardware_case",
+  "detected_text": "BIN_002 NETWORK CABLES & CRIMPERS",
+  "short_description": "Green organizer case containing Cat6 patch cables, RJ45 connectors, and crimping tools.",
+  "items": [
+    {
+      "title": "Cat6 Snagless Ethernet Patch Cables (Pack of 5)",
+      "category": "Tools & Equipment",
+      "quantity": 5,
+      "tags": ["network", "cat6", "cables"]
+    },
+    {
+      "title": "Pass-Through RJ45 Modular Crimper",
+      "category": "Tools & Equipment",
+      "quantity": 1,
+      "tags": ["tools", "crimper", "rj45"]
+    }
+  ]
+}
