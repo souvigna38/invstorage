@@ -1,0 +1,29 @@
+{
+  "bin_id": "BIN_001",
+  "zone": "Garage Shelf A",
+  "parent_container": "Garage",
+  "main_color": "blue",
+  "object_type": "storage_bin",
+  "detected_text": "BIN_001 YONEX BADMINTON",
+  "short_description": "Clear plastic bin labeled BIN_001 containing Yonex badminton rackets, shuttlecocks, and net.",
+  "items": [
+    {
+      "title": "Yonex Nanoflare 800 Badminton Racket",
+      "category": "Sports & Outdoors",
+      "quantity": 2,
+      "tags": ["badminton", "racket", "yonex"]
+    },
+    {
+      "title": "Yonex Aerosensa 30 Feather Shuttlecocks (Tube of 12)",
+      "category": "Sports & Outdoors",
+      "quantity": 3,
+      "tags": ["badminton", "birdies", "shuttlecocks"]
+    },
+    {
+      "title": "Portable Badminton Net Set",
+      "category": "Sports & Outdoors",
+      "quantity": 1,
+      "tags": ["badminton", "net"]
+    }
+  ]
+}

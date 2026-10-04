@@ -59,7 +59,7 @@ function buildSearchQuery(item: {
 
   // If no manufacturer/model, use the title (but clean it up)
   if (parts.length === 0) {
-    let cleaned = item.title
+    const cleaned = item.title
       .replace(/^Photo Inbox:\s*/i, "")
       .replace(/^IMG\s*\d+/i, "")
       .replace(/\s*—\s*/g, " ")

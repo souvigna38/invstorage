@@ -56,6 +56,19 @@ backend/minio_data/
 # Database and storage tarballs — re-generate with ./scripts/backup.sh
 backend/*.tar.gz
 data/migration_*/
+data/inventory_backup_*.sql
+data/*backup*.sql
+backend/init/*backup*.sql
+*.sql.bak
+*.sql.backup
+
+# ── Agent State & Credentials ────────────────────────────────────────────────
+openclaw/workspace/.openclaw/
+**/.openclaw/
+openclaw/credentials/
+credentials/
+*.key
+*.crt
 
 # ── Photo Inbox (personal photos — NOT for version control) ──────────────────
 photo-inbox/processed/

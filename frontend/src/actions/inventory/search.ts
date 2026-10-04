@@ -7,24 +7,13 @@ import { getProducts } from "./queries";
 // =============================================================================
 // SEMANTIC SEARCH — vector similarity via CLIP + pgvector
 // =============================================================================
-const CLIP_SERVICE_URL = process.env.CLIP_SERVICE_URL || "http://localhost:8100";
+import { getClipEmbedding } from "@/lib/vision";
 
 /**
- * Convert user text to a CLIP embedding via the clip-service.
+ * Convert user text to a CLIP embedding via the clip-service or pluggable fallback.
  */
 async function getTextEmbedding(text: string): Promise<number[] | null> {
-  try {
-    const resp = await fetch(`${CLIP_SERVICE_URL}/embed-text`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    return data.embedding as number[];
-  } catch {
-    return null;
-  }
+  return getClipEmbedding(text);
 }
 
 /**

@@ -261,16 +261,17 @@ async function getClipEmbedding(filePath: string): Promise<number[] | null> {
       method: "POST",
       body: formData,
     });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const embedding: number[] = data.embedding;
-    if (!Array.isArray(embedding) || embedding.length !== 512) return null;
-    return embedding;
+    if (resp.ok) {
+      const data = await resp.json();
+      const embedding: number[] = data.embedding;
+      if (Array.isArray(embedding) && embedding.length === 512) return embedding;
+    }
   } catch {
-    return null;
+    // Fall back to pluggable vision embedding generator
   } finally {
     if (needsCleanup && fs.existsSync(jpegPath)) fs.unlinkSync(jpegPath);
   }
+  return visionGetClipEmbedding(path.basename(filePath));
 }
 
 async function saveEmbedding(
@@ -290,20 +291,29 @@ async function saveEmbedding(
 // AI Labeling — Ollama LLaVA
 // ---------------------------------------------------------------------------
 import { sanitizeAiLabel, type AiLabel } from "../lib/sanitize";
+import {
+  checkVisionHealth,
+  analyzeImage,
+  getClipEmbedding as visionGetClipEmbedding,
+} from "../lib/vision";
 
 async function checkOllamaHealth(): Promise<boolean> {
-  try {
-    const resp = await fetch(`${OLLAMA_HOST}/api/tags`);
-    if (!resp.ok) return false;
-    const data = await resp.json();
-    const models = data.models?.map((m: { name: string }) => m.name) || [];
-    return models.some((m: string) => m.startsWith(OLLAMA_MODEL));
-  } catch {
-    return false;
-  }
+  const health = await checkVisionHealth();
+  return health.available;
 }
 
 async function analyzeWithLLaVA(filePath: string): Promise<AiLabel | null> {
+  const health = await checkVisionHealth();
+  if (health.provider === "mock") {
+    const res = await analyzeImage(filePath, { filename: path.basename(filePath) });
+    return sanitizeAiLabel({
+      main_color: res.main_color,
+      object_type: res.object_type,
+      detected_text: res.detected_text,
+      short_description: res.short_description,
+    });
+  }
+
   const { jpegPath, needsCleanup } = convertToJpegIfNeeded(filePath);
   try {
     const imageBuffer = fs.readFileSync(jpegPath);
