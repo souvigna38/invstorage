@@ -33,8 +33,8 @@ async function getMedusaToken(): Promise<string | null> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        email: "admin@invstorage.local",
-        password: "invtrack123",
+        email: process.env.MEDUSA_ADMIN_EMAIL || "admin@invstorage.local",
+        password: process.env.MEDUSA_ADMIN_PASSWORD || "",
       }),
     })
     if (resp.ok) {

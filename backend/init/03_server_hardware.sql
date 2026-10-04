@@ -107,7 +107,7 @@ INSERT INTO items (
   'NET-FABRIC-001', 'NGEAR-M4300-7AX', 'M4300-12X12F', 'XSM4324S', 'Netgear',
   11, 8, 8, 'available', 1,
   NULL, NULL, NULL, NULL,
-  'Layer 2 Switching | Jumbo Frames MTU 9000 | Subnet: 192.168.100.x (Isolated)',
+  'Layer 2 Switching | Jumbo Frames MTU 9000 | Subnet: <isolated-cluster-subnet>',
   'High-Throughput Cluster Backplane',
   NULL,
   '12x 10G SFP+ ports + 12x 10G Base-T ports. LACP bonding enabled. Isolated subnet with no internet access. Jumbo frames for max throughput.'
